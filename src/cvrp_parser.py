@@ -61,6 +61,7 @@ class CVRPParser:
 
         current_section = None
         edge_weight_type = "EUC_2D"
+        raw_weights = []
 
         for line in lines:
             if line == "EOF":
@@ -83,7 +84,7 @@ class CVRPParser:
                 continue
 
             # 2. Nhận diện các Section dữ liệu
-            if line in ["NODE_COORD_SECTION", "DEMAND_SECTION", "DEPOT_SECTION"]:
+            if line in ["NODE_COORD_SECTION", "DEMAND_SECTION", "DEPOT_SECTION", "EDGE_WEIGHT_SECTION"]:
                 current_section = line
                 continue
 
@@ -108,8 +109,30 @@ class CVRPParser:
                 if depot_id != -1:
                     instance.depot_id = depot_id
 
+            elif current_section == "EDGE_WEIGHT_SECTION":
+                for p in parts:
+                    try:
+                        raw_weights.append(int(p))
+                    except ValueError:
+                        pass
+
         # 4. Tính toán ma trận khoảng cách
-        instance.distance_matrix = cls._calc_distance_matrix(instance.coords, edge_weight_type)
+        if instance.coords:
+            instance.distance_matrix = cls._calc_distance_matrix(instance.coords, edge_weight_type)
+        elif raw_weights and instance.dimension > 0:
+            n = instance.dimension
+            matrix = [[0] * n for _ in range(n)]
+            idx = 0
+            for i in range(1, n):
+                for j in range(i):
+                    if idx < len(raw_weights):
+                        matrix[i][j] = matrix[j][i] = raw_weights[idx]
+                        idx += 1
+            instance.distance_matrix = matrix
+            for i in range(1, n + 1):
+                if i not in instance.coords:
+                    angle = 2 * math.pi * i / n
+                    instance.coords[i] = (round(100.0 * math.cos(angle), 2), round(100.0 * math.sin(angle), 2))
 
         return instance
 
