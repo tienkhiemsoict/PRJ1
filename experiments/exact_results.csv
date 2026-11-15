@@ -1,0 +1,11 @@
+testcase,n,cap,vehicle,optimal,algor,time
+E-n10-k3,10,3000,3,272,backtracking,0.0333
+E-n10-k3,10,3000,3,272,dynamic_programming,0.0566
+E-n12-k3,12,3500,3,272,backtracking,0.7019
+E-n12-k3,12,3500,3,272,dynamic_programming,0.7922
+E-n13-k4,13,6000,4,247,backtracking,5.6091
+E-n13-k4,13,6000,4,247,dynamic_programming,2.3035
+E-n14-k4,14,3500,4,326,backtracking,7.2323
+E-n14-k4,14,3500,4,326,dynamic_programming,5.0589
+E-n8-k2,8,4000,2,208,backtracking,0.0
+E-n8-k2,8,4000,2,208,dynamic_programming,0.0165
