@@ -6,8 +6,12 @@ except ImportError:
     from cvrp_parser import CVRPParser, CVRPInstance
 
 
-def solve_cvrp(instance: CVRPInstance, time_limit: float = 10.0, max_customers: Optional[int] = 10) -> Dict[str, Any]:
-    node_ids = sorted(instance.coords.keys())
+def solve_cvrp(
+    instance: CVRPInstance,
+    time_limit: Optional[float] = None,
+    max_customers: Optional[int] = None
+) -> Dict[str, Any]:
+    node_ids = sorted(instance.coords.keys() if instance.coords else range(1, instance.dimension + 1))
     depot_id = instance.depot_id
     depot_idx = node_ids.index(depot_id)
 
@@ -17,11 +21,29 @@ def solve_cvrp(instance: CVRPInstance, time_limit: float = 10.0, max_customers: 
     else:
         customers = all_customers
 
+    start_time = time.time()
+    if not customers:
+        return {
+            "algorithm": "backtracking",
+            "instance_name": instance.name,
+            "total_distance": 0,
+            "routes": [],
+            "num_vehicles": 0,
+            "execution_time": 0.0
+        }
+
+    num_nodes = len(node_ids)
     demands = [instance.demands[nid] for nid in node_ids]
     capacity = instance.capacity
     dist = instance.distance_matrix
 
-    min_in = {v: min(dist[u][v] for u in range(len(node_ids)) if u != v) for v in customers}
+    min_out = [min(dist[v][w] for w in range(num_nodes) if w != v) for v in range(num_nodes)]
+    min_depot_out = min_out[depot_idx]
+    is_symmetric = all(dist[i][j] == dist[j][i] for i in range(num_nodes) for j in range(i + 1, num_nodes))
+    sorted_neighbors = [
+        sorted(customers, key=lambda v, u=u: dist[u][v])
+        for u in range(num_nodes)
+    ]
 
     def greedy_init():
         unvisited = set(customers)
@@ -47,36 +69,88 @@ def solve_cvrp(instance: CVRPInstance, time_limit: float = 10.0, max_customers: 
         return total_cost, routes
 
     best_cost, best_routes = greedy_init()
-    visited = {v: False for v in customers}
-    start_time = time.time()
+    visited = [False] * num_nodes
+    total_customers = len(customers)
+    init_rem_min_out = sum(min_out[v] for v in customers)
+    init_rem_demand = sum(demands[v] for v in customers)
 
-    def backtrack(u, load, count, cost, curr_route, routes):
-        nonlocal best_cost, best_routes
-        if time.time() - start_time > time_limit:
+    curr_route = [depot_id]
+    routes: List[List[int]] = []
+    timed_out = False
+
+    def backtrack(
+        u: int,
+        load: int,
+        count: int,
+        cost: int,
+        must_visit: int,
+        rem_min_out: int,
+        rem_demand: int
+    ):
+        nonlocal best_cost, best_routes, timed_out
+        if timed_out:
+            return
+        if time_limit is not None and time.time() - start_time > time_limit:
+            timed_out = True
             return
 
-        rem_lb = sum(min_in[v] for v in customers if not visited[v])
-        if cost + rem_lb + dist[u][depot_idx] >= best_cost:
-            return
-
-        if count == len(customers):
+        if count == total_customers:
+            if is_symmetric and len(curr_route) >= 3 and curr_route[1] > curr_route[-1]:
+                return
             total = cost + dist[u][depot_idx]
             if total < best_cost:
                 best_cost = total
                 best_routes = [r[:] for r in routes] + [curr_route + [depot_id]]
             return
 
-        cands = [v for v in customers if not visited[v] and load + demands[v] <= capacity]
-        cands.sort(key=lambda v: dist[u][v])
-        for v in cands:
-            visited[v] = True
-            backtrack(v, load + demands[v], count + 1, cost + dist[u][v], curr_route + [node_ids[v]], routes)
-            visited[v] = False
+        rem_cap = (capacity - load) if u != depot_idx else 0
+        excess_demand = rem_demand - rem_cap
+        k_new = (excess_demand + capacity - 1) // capacity if excess_demand > 0 else 0
 
-        if u != depot_idx:
-            backtrack(depot_idx, 0, count, cost + dist[u][depot_idx], [depot_id], routes + [curr_route + [depot_id]])
+        rem_lb = rem_min_out + (min_out[u] if u != depot_idx else 0) + k_new * min_depot_out
+        if cost + rem_lb >= best_cost:
+            return
 
-    backtrack(depot_idx, 0, 0, 0, [depot_id], [])
+        if u == depot_idx:
+            for v in customers:
+                if not visited[v]:
+                    must_visit = v
+                    break
+
+        for v in sorted_neighbors[u]:
+            if not visited[v] and load + demands[v] <= capacity:
+                d_uv = dist[u][v]
+                if cost + d_uv >= best_cost:
+                    continue
+                visited[v] = True
+                curr_route.append(node_ids[v])
+                backtrack(
+                    v,
+                    load + demands[v],
+                    count + 1,
+                    cost + d_uv,
+                    must_visit,
+                    rem_min_out - min_out[v],
+                    rem_demand - demands[v]
+                )
+                curr_route.pop()
+                visited[v] = False
+
+        if u != depot_idx and visited[must_visit]:
+            if not (is_symmetric and len(curr_route) >= 3 and curr_route[1] > curr_route[-1]):
+                d_ret = dist[u][depot_idx]
+                if cost + d_ret + rem_min_out + ((rem_demand + capacity - 1) // capacity) * min_depot_out < best_cost:
+                    closed = curr_route[:] + [depot_id]
+                    routes.append(closed)
+                    saved_route = curr_route[:]
+                    curr_route.clear()
+                    curr_route.append(depot_id)
+                    backtrack(depot_idx, 0, count, cost + d_ret, -1, rem_min_out, rem_demand)
+                    curr_route.clear()
+                    curr_route.extend(saved_route)
+                    routes.pop()
+
+    backtrack(depot_idx, 0, 0, 0, -1, init_rem_min_out, init_rem_demand)
     elapsed_time = round(time.time() - start_time, 4)
 
     return {
@@ -89,14 +163,15 @@ def solve_cvrp(instance: CVRPInstance, time_limit: float = 10.0, max_customers: 
     }
 
 
-def solve_from_file(file_path: str, time_limit: float = 10.0, max_customers: Optional[int] = 10) -> Dict[str, Any]:
+def solve_from_file(
+    file_path: str,
+    time_limit: Optional[float] = None,
+    max_customers: Optional[int] = None
+) -> Dict[str, Any]:
     instance = CVRPParser.parse_file(file_path)
     return solve_cvrp(instance, time_limit, max_customers)
 
 
 if __name__ == "__main__":
-    result = solve_from_file("CVRPLIB/P-n16-k8.vrp", time_limit=5.0, max_customers=10)
-    print("Cost:", result["total_distance"])
-    print("Time:", result["execution_time"])
-    print("Routes:", result["routes"])
-
+    result = solve_from_file("CVRPLIB/E-n13-k4.vrp")
+    print("Cost:", result["total_distance"], "Vehicles:", result["num_vehicles"], "Time:", result["execution_time"])

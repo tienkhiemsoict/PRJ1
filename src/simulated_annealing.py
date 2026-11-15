@@ -8,32 +8,12 @@ except ImportError:
     from cvrp_parser import CVRPParser, CVRPInstance
 
 
-def two_opt_route(route: List[int], dist: List[List[int]], id_to_idx: Dict[int, int]) -> List[int]:
-    if len(route) <= 3:
-        return route
-    best = route[:]
-    improved = True
-    while improved:
-        improved = False
-        for i in range(1, len(best) - 2):
-            for j in range(i + 1, len(best) - 1):
-                d_old = dist[id_to_idx[best[i - 1]]][id_to_idx[best[i]]] + dist[id_to_idx[best[j]]][id_to_idx[best[j + 1]]]
-                d_new = dist[id_to_idx[best[i - 1]]][id_to_idx[best[j]]] + dist[id_to_idx[best[i]]][id_to_idx[best[j + 1]]]
-                if d_new < d_old:
-                    best[i:j + 1] = reversed(best[i:j + 1])
-                    improved = True
-                    break
-            if improved:
-                break
-    return best
-
-
 def solve_cvrp(
     instance: CVRPInstance,
-    t_init: float = 1000.0,
+    t_init: float = 200.0,
     t_min: float = 0.05,
-    cooling_rate: float = 0.985,
-    iters_per_temp: int = 40,
+    cooling_rate: float = 0.995,
+    iters_per_temp: int = 350,
     seed: Optional[int] = None,
     return_history: bool = False
 ) -> Dict[str, Any]:
@@ -47,13 +27,53 @@ def solve_cvrp(
     id_to_idx = {nid: i for i, nid in enumerate(node_ids)}
     demands = instance.demands
     capacity = instance.capacity
+    num_trucks = instance.num_trucks
     dist = instance.distance_matrix
+
+    def _calc_route_dist(route: List[int]) -> int:
+        return sum(dist[id_to_idx[route[i]]][id_to_idx[route[i + 1]]] for i in range(len(route) - 1))
+
+    def _pack_to_num_trucks(routes: List[List[int]]) -> List[List[int]]:
+        if num_trucks <= 0 or len(routes) <= num_trucks:
+            return routes
+        loads = [sum(demands[c] for c in r[1:-1]) for r in routes]
+        while len(routes) > num_trucks:
+            # Try emptying the lightest route by relocating its customers to other routes
+            src_idx = min(range(len(routes)), key=lambda idx: loads[idx])
+            src_custs = routes[src_idx][1:-1]
+            temp_routes = [r[:] for i, r in enumerate(routes) if i != src_idx]
+            temp_loads = [l for i, l in enumerate(loads) if i != src_idx]
+            moved_all = True
+            for c in src_custs:
+                d = demands[c]
+                best_pos = None
+                best_delta = float("inf")
+                for r_idx, r in enumerate(temp_routes):
+                    if temp_loads[r_idx] + d <= capacity:
+                        c_i = id_to_idx[c]
+                        for pos in range(1, len(r)):
+                            u_i = id_to_idx[r[pos - 1]]
+                            v_i = id_to_idx[r[pos]]
+                            delta = dist[u_i][c_i] + dist[c_i][v_i] - dist[u_i][v_i]
+                            if delta < best_delta:
+                                best_delta = delta
+                                best_pos = (r_idx, pos)
+                if best_pos is None:
+                    moved_all = False
+                    break
+                r_idx, pos = best_pos
+                temp_routes[r_idx].insert(pos, c)
+                temp_loads[r_idx] += d
+            if not moved_all:
+                break
+            routes = temp_routes
+            loads = temp_loads
+        return routes
 
     def split_routes(tour: List[int]):
         routes: List[List[int]] = []
         curr_route = [depot_id]
         curr_load = 0
-        total_cost = 0
 
         for c in tour:
             d = demands[c]
@@ -70,27 +90,16 @@ def solve_cvrp(
             curr_route.append(depot_id)
             routes.append(curr_route)
 
-        for r in routes:
-            for i in range(len(r) - 1):
-                total_cost += dist[id_to_idx[r[i]]][id_to_idx[r[i + 1]]]
+        routes = _pack_to_num_trucks(routes)
+        total_dist = sum(_calc_route_dist(r) for r in routes)
+        penalty = max(0, len(routes) - num_trucks) * 1_000_000 if num_trucks > 0 else 0
 
-        return routes, total_cost
-
-    def get_nn_tour():
-        unvisited = set(customers)
-        curr = depot_id
-        tour = []
-        while unvisited:
-            nxt = min(unvisited, key=lambda c: dist[id_to_idx[curr]][id_to_idx[c]])
-            tour.append(nxt)
-            unvisited.remove(nxt)
-            curr = nxt
-        return tour
+        return routes, total_dist + penalty
 
     start_time = time.time()
     n = len(customers)
     if n == 0:
-        return {
+        res = {
             "algorithm": "simulated_annealing",
             "instance_name": instance.name,
             "total_distance": 0,
@@ -98,23 +107,17 @@ def solve_cvrp(
             "num_vehicles": 0,
             "execution_time": 0.0
         }
+        if return_history:
+            res["history"] = [0]
+        return res
 
-    nn_tour = get_nn_tour()
-    nn_routes, nn_cost = split_routes(nn_tour)
-
-    rand_tour = customers[:]
-    random.shuffle(rand_tour)
-    rand_routes, rand_cost = split_routes(rand_tour)
-
-    if nn_cost <= rand_cost:
-        curr_tour = nn_tour[:]
-        curr_cost = nn_cost
-    else:
-        curr_tour = rand_tour[:]
-        curr_cost = rand_cost
+    curr_tour = customers[:]
+    random.shuffle(curr_tour)
+    curr_routes, curr_cost = split_routes(curr_tour)
 
     best_tour = curr_tour[:]
     best_cost = curr_cost
+    best_routes = curr_routes
     history = [best_cost]
 
     t = t_init
@@ -132,7 +135,7 @@ def solve_cvrp(
                 val = new_tour.pop(j)
                 new_tour.insert(i, val)
 
-            _, new_cost = split_routes(new_tour)
+            new_routes, new_cost = split_routes(new_tour)
             delta = new_cost - curr_cost
 
             if delta < 0 or random.random() < math.exp(-delta / t):
@@ -141,23 +144,19 @@ def solve_cvrp(
                 if curr_cost < best_cost:
                     best_cost = curr_cost
                     best_tour = curr_tour[:]
+                    best_routes = new_routes
 
         t *= cooling_rate
         if return_history:
             history.append(best_cost)
 
-    raw_routes, _ = split_routes(best_tour)
-    best_routes = [two_opt_route(r, dist, id_to_idx) for r in raw_routes]
-    best_cost = sum(dist[id_to_idx[r[i]]][id_to_idx[r[i + 1]]] for r in best_routes for i in range(len(r) - 1))
-    if return_history:
-        history.append(best_cost)
-
     elapsed_time = round(time.time() - start_time, 4)
+    final_distance = sum(_calc_route_dist(r) for r in best_routes)
 
     res = {
         "algorithm": "simulated_annealing",
         "instance_name": instance.name,
-        "total_distance": best_cost,
+        "total_distance": final_distance,
         "routes": best_routes,
         "num_vehicles": len(best_routes),
         "execution_time": elapsed_time
@@ -169,10 +168,10 @@ def solve_cvrp(
 
 def solve_from_file(
     file_path: str,
-    t_init: float = 1000.0,
+    t_init: float = 200.0,
     t_min: float = 0.05,
-    cooling_rate: float = 0.985,
-    iters_per_temp: int = 40,
+    cooling_rate: float = 0.995,
+    iters_per_temp: int = 350,
     seed: Optional[int] = None
 ) -> Dict[str, Any]:
     instance = CVRPParser.parse_file(file_path)
@@ -181,7 +180,4 @@ def solve_from_file(
 
 if __name__ == "__main__":
     result = solve_from_file("CVRPLIB/A-n32-k5.vrp", seed=42)
-    print("Cost:", result["total_distance"])
-    print("Time:", result["execution_time"])
-    print("Vehicles:", result["num_vehicles"])
-    print("Routes:", result["routes"])
+    print("Cost:", result["total_distance"], "Time:", result["execution_time"], "Vehicles:", result["num_vehicles"])

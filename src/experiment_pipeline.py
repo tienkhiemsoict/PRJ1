@@ -46,19 +46,26 @@ def get_optimal_value(filepath: Path) -> Optional[int]:
 
 def run_experiment(
     instance_files: List[str],
-    threshold_n: int = 20,
-    meta_runs: int = 10,
-    time_limit_bt: float = 5.0,
+    threshold_n: int = 15,
+    meta_runs: int = 1,
+    time_limit_bt: Optional[float] = None,
     sa_params: Optional[Dict[str, Any]] = None,
     ga_params: Optional[Dict[str, Any]] = None,
     output_dir: str = "experiments",
     verbose: bool = True
 ) -> Dict[str, Any]:
     if sa_params is None:
-        sa_params = {"t_init": 1000.0, "t_min": 0.05, "cooling_rate": 0.985, "iters_per_temp": 40}
+        sa_params = {"t_init": 200.0, "t_min": 0.05, "cooling_rate": 0.995, "iters_per_temp": 350}
 
     if ga_params is None:
-        ga_params = {"pop_size": 50, "generations": 100, "crossover_rate": 0.85, "mutation_rate": 0.25}
+        ga_params = {
+            "pop_size": 80,
+            "generations": 3500,
+            "crossover_rate": 0.75,
+            "mutation_rate": 0.5,
+            "tournament_size": 5,
+            "elite_size": 3
+        }
 
     out_path = Path(output_dir)
     out_path.mkdir(parents=True, exist_ok=True)
@@ -159,8 +166,10 @@ def run_experiment(
                     instance,
                     pop_size=ga_params.get("pop_size", 50),
                     generations=ga_params.get("generations", 100),
-                    crossover_rate=ga_params.get("crossover_rate", 0.85),
-                    mutation_rate=ga_params.get("mutation_rate", 0.25),
+                    crossover_rate=ga_params.get("crossover_rate", 0.8),
+                    mutation_rate=ga_params.get("mutation_rate", 0.2),
+                    tournament_size=ga_params.get("tournament_size", 3),
+                    elite_size=ga_params.get("elite_size", 2),
                     seed=42 + r
                 )
                 ga_times.append(res_ga["execution_time"])
@@ -185,8 +194,16 @@ def run_experiment(
                 "avg_gap": f"{avg_gap_ga:+.2f}%" if avg_gap_ga is not None else "N/A"
             })
 
-    save_benchmark_outputs(exact_results, meta_results, out_path)
-    generate_all_charts(exact_results, meta_results, out_path)
+    save_benchmark_outputs(
+        exact_results,
+        meta_results,
+        out_path,
+        threshold_n=threshold_n,
+        meta_runs=meta_runs,
+        sa_params=sa_params,
+        ga_params=ga_params
+    )
+    generate_all_charts(exact_results, meta_results, out_path, threshold_n=threshold_n, meta_runs=meta_runs)
 
     return {
         "status": "success",
@@ -203,12 +220,32 @@ def run_experiment(
             "markdown": str(out_path / "benchmark_summary.md"),
             "chart_exact": str(out_path / "chart_exact_comparison.png"),
             "chart_convergence": str(out_path / "chart_meta_convergence.png"),
-            "chart_meta": str(out_path / "chart_meta_analysis.png")
+            "chart_meta": str(out_path / "chart_meta_comparison.png")
         }
     }
 
 
-def save_benchmark_outputs(exact_results: List[Dict[str, Any]], meta_results: List[Dict[str, Any]], out_dir: Path):
+def save_benchmark_outputs(
+    exact_results: List[Dict[str, Any]],
+    meta_results: List[Dict[str, Any]],
+    out_dir: Path,
+    threshold_n: int = 15,
+    meta_runs: int = 1,
+    sa_params: Optional[Dict[str, Any]] = None,
+    ga_params: Optional[Dict[str, Any]] = None
+):
+    if sa_params is None:
+        sa_params = {"t_init": 200.0, "t_min": 0.05, "cooling_rate": 0.995, "iters_per_temp": 350}
+    if ga_params is None:
+        ga_params = {
+            "pop_size": 80,
+            "generations": 3500,
+            "crossover_rate": 0.75,
+            "mutation_rate": 0.5,
+            "tournament_size": 5,
+            "elite_size": 3
+        }
+
     # 1. JSON
     json_path = out_dir / "benchmark_results.json"
     with open(json_path, "w", encoding="utf-8") as f:
@@ -231,18 +268,39 @@ def save_benchmark_outputs(exact_results: List[Dict[str, Any]], meta_results: Li
             writer.writerow(row)
 
     # 4. Markdown Report
+    sa_cfg = (
+        f"`t_init={sa_params.get('t_init', 1000.0)}`, `t_min={sa_params.get('t_min', 0.05)}`, "
+        f"`cooling_rate={sa_params.get('cooling_rate', 0.985)}`, `iters_per_temp={sa_params.get('iters_per_temp', 40)}`"
+    )
+    ga_cfg = (
+        f"`pop_size={ga_params.get('pop_size', 50)}`, `generations={ga_params.get('generations', 100)}`, "
+        f"`crossover_rate={ga_params.get('crossover_rate', 0.8)}`, `mutation_rate={ga_params.get('mutation_rate', 0.2)}`, "
+        f"`tournament={ga_params.get('tournament_size', 3)}`, `elite={ga_params.get('elite_size', 2)}`"
+    )
+
     md_path = out_dir / "benchmark_summary.md"
     lines = [
         "# CVRP Benchmark Summary Report",
         "",
         f"> **Thời gian tạo**: {time.strftime('%Y-%m-%d %H:%M:%S')}  ",
-        f"> **Quy tắc phân loại**: Ngưỡng $N = 20$  ",
-        f"> - $N \\le 20$: Chỉ chạy 2 thuật toán chính xác (`backtracking`, `dynamic_programming`).  ",
-        f"> - $N > 20$: Chỉ chạy 2 thuật toán metaheuristic (`simulated_annealing`, `genetic_algorithm`), số lần chạy $runs = 10$.  ",
+        f"> **Quy tắc phân loại**: Ngưỡng $N = {threshold_n}$  ",
+        f"> - $N \\le {threshold_n}$: Chỉ chạy 2 thuật toán chính xác (`backtracking`, `dynamic_programming`), không áp `time_limit` để giải tới nghiệm tối ưu chính xác.  ",
+        f"> - $N > {threshold_n}$: Chỉ chạy 2 thuật toán metaheuristic (`simulated_annealing`, `genetic_algorithm`), số lần chạy $runs = {meta_runs}$.  ",
         "",
         "---",
         "",
-        "## 1. Kết quả thuật toán chính xác (N <= 20)",
+        "## 1. Cấu hình tham số & siêu tham số",
+        "",
+        "| Thuật toán | Tham số / Siêu tham số | Mô tả cài đặt cơ bản |",
+        "| :--- | :--- | :--- |",
+        f"| **Backtracking** ($N \\le {threshold_n}$) | `time_limit=None`, `max_customers=None` | Quay lui cơ bản kết hợp tỉa nhánh cận dưới `min_out` và chặn đối xứng đầu tuyến |",
+        f"| **Dynamic Programming** ($N \\le {threshold_n}$) | `max_customers=None` | Quy hoạch động bitmask đệ quy có nhớ `memo[(mask, last_u, rem_cap)]` |",
+        f"| **Simulated Annealing** ($N > {threshold_n}$) | {sa_cfg} | Khởi tạo hoán vị ngẫu nhiên, 3 toán tử lân cận và phạt sai số xe $K$ |",
+        f"| **Genetic Algorithm** ($N > {threshold_n}$) | {ga_cfg} | Quần thể ngẫu nhiên, lai ghép OX, đột biến đảo đoạn, Tournament và phạt sai số xe $K$ |",
+        "",
+        "---",
+        "",
+        f"## 2. Kết quả thuật toán chính xác (N <= {threshold_n})",
         "",
         "| testcase | n | cap | vehicle | optimal | algor | time |",
         "| :--- | :---: | :---: | :---: | :---: | :--- | :---: |"
@@ -259,7 +317,7 @@ def save_benchmark_outputs(exact_results: List[Dict[str, Any]], meta_results: Li
         "",
         "---",
         "",
-        "## 2. Báo cáo tổng hợp thuật toán Metaheuristic (N > 20, 10 runs trung bình)",
+        f"## 3. Báo cáo tổng hợp thuật toán Metaheuristic (N > {threshold_n}, {meta_runs} runs trung bình)",
         ""
     ])
 
@@ -279,12 +337,12 @@ def save_benchmark_outputs(exact_results: List[Dict[str, Any]], meta_results: Li
         ga_avg_time = sum(float(r["avg_time"]) for r in ga_rows) / len(ga_rows)
 
         lines.extend([
-            "### Bảng tổng kết trung bình (83 bài toán)",
+            f"### Bảng tổng kết trung bình ({len(sa_rows)} bài toán)",
             "",
             "| Thuật toán | Số bài toán | Số runs | Thời gian TB (`avg_time`) | Sai số TB (`avg_gap`) |",
             "| :--- | :---: | :---: | :---: | :---: |",
-            f"| **Simulated Annealing (SA)** | {len(sa_rows)} | 10 | {sa_avg_time:.4f} s | **+{sa_avg_gap:.2f}%** |",
-            f"| **Genetic Algorithm (GA)** | {len(ga_rows)} | 10 | {ga_avg_time:.4f} s | **+{ga_avg_gap:.2f}%** |",
+            f"| **Simulated Annealing (SA)** | {len(sa_rows)} | {meta_runs} | {sa_avg_time:.4f} s | **+{sa_avg_gap:.2f}%** |",
+            f"| **Genetic Algorithm (GA)** | {len(ga_rows)} | {meta_runs} | {ga_avg_time:.4f} s | **+{ga_avg_gap:.2f}%** |",
             "",
             "### Một số bài toán tiêu biểu đại diện",
             "",
@@ -292,7 +350,7 @@ def save_benchmark_outputs(exact_results: List[Dict[str, Any]], meta_results: Li
             "| :--- | :---: | :---: | :---: | :---: | :--- | :---: | :---: | :---: |"
         ])
 
-        sample_cases = ["A-n32-k5", "A-n45-k6", "A-n60-k9", "B-n35-k5", "B-n50-k7", "P-n23-k8", "P-n50-k10", "P-n76-k5"]
+        sample_cases = ["P-n16-k8", "A-n32-k5", "A-n45-k6", "A-n60-k9", "B-n35-k5", "B-n50-k7", "P-n50-k10", "P-n76-k5"]
         for sc in sample_cases:
             for r in meta_results:
                 if r["testcase"] == sc:
@@ -303,11 +361,11 @@ def save_benchmark_outputs(exact_results: List[Dict[str, Any]], meta_results: Li
 
         lines.extend([
             "",
-            "*(Dữ liệu chi tiết toàn bộ 83 bài toán được lưu trữ tại `metaheuristic_results.csv`)*",
+            f"*(Dữ liệu chi tiết toàn bộ {len(sa_rows)} bài toán được lưu trữ tại `metaheuristic_results.csv`)*",
             "",
             "---",
             "",
-            "## 3. Biểu đồ trực quan",
+            "## 4. Biểu đồ trực quan",
             "",
             "### Đồ thị hội tụ (Convergence Curves)",
             "![Đồ thị hội tụ](chart_meta_convergence.png)",
@@ -320,7 +378,13 @@ def save_benchmark_outputs(exact_results: List[Dict[str, Any]], meta_results: Li
         f.write("\n".join(lines))
 
 
-def generate_all_charts(exact_results: List[Dict[str, Any]], meta_results: List[Dict[str, Any]], out_dir: Path):
+def generate_all_charts(
+    exact_results: List[Dict[str, Any]],
+    meta_results: List[Dict[str, Any]],
+    out_dir: Path,
+    threshold_n: int = 15,
+    meta_runs: int = 1
+):
     try:
         import matplotlib.pyplot as plt
         import numpy as np
@@ -330,7 +394,7 @@ def generate_all_charts(exact_results: List[Dict[str, Any]], meta_results: List[
         plt.rcParams["axes.linewidth"] = 0.8
 
         # Chart 1: Exact Comparison
-        testcases = sorted(list(set(r["testcase"] for r in exact_results)))
+        testcases = list(dict.fromkeys(r["testcase"] for r in sorted(exact_results, key=lambda x: x["n"])))
         if testcases:
             bt_times, dp_times = [], []
             for tc in testcases:
@@ -339,18 +403,21 @@ def generate_all_charts(exact_results: List[Dict[str, Any]], meta_results: List[
                 bt_times.append(float(bt_row["time"]) if bt_row else 0)
                 dp_times.append(float(dp_row["time"]) if dp_row else 0)
 
-            fig, ax = plt.subplots(figsize=(8, 4.8))
+            fig, ax = plt.subplots(figsize=(7.5, 4.6))
             x = np.arange(len(testcases))
-            w = 0.35
+            w = 0.3
 
             rects1 = ax.bar(x - w / 2, bt_times, w, label="Backtracking", color="#d95f02", alpha=0.85)
             rects2 = ax.bar(x + w / 2, dp_times, w, label="Dynamic Programming", color="#2b5c8f", alpha=0.85)
-            ax.set_title("So sánh thời gian thực thi thuật toán chính xác (N <= 20)", fontsize=12, pad=10, fontweight="bold")
+            ax.set_title(f"So sánh thời gian thực thi thuật toán chính xác (N <= {threshold_n})", fontsize=12, pad=10, fontweight="bold")
             ax.set_xlabel("Bài toán kiểm thử", fontsize=11)
             ax.set_ylabel("Thời gian chạy (giây)", fontsize=11)
             ax.set_xticks(x)
             ax.set_xticklabels(testcases, fontsize=10)
-            ax.legend(loc="upper right", fontsize=10)
+            if len(testcases) == 1:
+                ax.set_xlim(-0.7, 0.7)
+            ax.set_ylim(0, max(max(bt_times, default=1.0), max(dp_times, default=1.0)) * 1.25)
+            ax.legend(loc="upper left", fontsize=10)
             ax.grid(True, linestyle="--", alpha=0.5, axis="y")
 
             for rect in rects1:
@@ -379,8 +446,8 @@ def generate_all_charts(exact_results: List[Dict[str, Any]], meta_results: List[
             if vrp_path.exists():
                 inst = CVRPParser.parse_file(str(vrp_path))
                 opt = get_optimal_value(vrp_path)
-                res_sa = solve_sa(inst, iters_per_temp=30, cooling_rate=0.985, return_history=True, seed=42)
-                res_ga = solve_ga(inst, pop_size=40, generations=100, return_history=True, seed=42)
+                res_sa = solve_sa(inst, return_history=True, seed=42)
+                res_ga = solve_ga(inst, return_history=True, seed=42)
                 x_sa = np.linspace(0, 100, len(res_sa.get("history", [])))
                 x_ga = np.linspace(0, 100, len(res_ga.get("history", [])))
                 ax.plot(x_sa, res_sa.get("history", []), label="Simulated Annealing", color="#2b5c8f", linewidth=2.0)
@@ -422,7 +489,7 @@ def generate_all_charts(exact_results: List[Dict[str, Any]], meta_results: List[
             mean_sa_gap = np.mean(sa_gaps)
             mean_ga_gap = np.mean(ga_gaps)
             b1 = ax1.bar(algs, [mean_sa_gap, mean_ga_gap], color=colors, width=0.45, alpha=0.85)
-            ax1.set_title("Sai số trung bình GAP (%) trên 83 bài toán", fontsize=12, fontweight="bold", pad=10)
+            ax1.set_title(f"Sai số trung bình GAP (%) trên {len(sa_rows)} bài toán", fontsize=12, fontweight="bold", pad=10)
             ax1.set_ylabel("Sai số GAP trung bình (%)", fontsize=10)
             ax1.grid(True, linestyle="--", alpha=0.5, axis="y")
             for bar in b1:
@@ -442,7 +509,7 @@ def generate_all_charts(exact_results: List[Dict[str, Any]], meta_results: List[
                 ax2.annotate(f"{yval:.4f}s", xy=(bar.get_x() + bar.get_width() / 2, yval),
                              xytext=(0, 3), textcoords="offset points", ha="center", va="bottom", fontsize=10, fontweight="bold")
 
-            fig.suptitle("So sánh hiệu năng tổng thể 2 thuật toán Metaheuristic (83 bài toán, 10 runs)", fontsize=13, fontweight="bold", y=1.02)
+            fig.suptitle(f"So sánh hiệu năng tổng thể 2 thuật toán Metaheuristic ({len(sa_rows)} bài toán, {meta_runs} runs)", fontsize=13, fontweight="bold", y=1.02)
             plt.tight_layout()
             plt.savefig(out_dir / "chart_meta_comparison.png", dpi=150, bbox_inches="tight")
             plt.close()
@@ -452,12 +519,12 @@ def generate_all_charts(exact_results: List[Dict[str, Any]], meta_results: List[
 
 
 def main():
-    parser = argparse.ArgumentParser(description="CVRP Automated Benchmark Pipeline (Threshold N=20)")
+    parser = argparse.ArgumentParser(description="CVRP Automated Benchmark Pipeline (Threshold N=15)")
     parser.add_argument("--all", action="store_true", help="Run benchmark on all instances in CVRPLIB/")
     parser.add_argument("--instances", nargs="+", default=None, help="List of instance filenames or paths")
-    parser.add_argument("--threshold-n", type=int, default=20, help="Threshold N (default: 20)")
-    parser.add_argument("--meta-runs", type=int, default=10, help="Number of runs for metaheuristic algorithms (default: 10)")
-    parser.add_argument("--time-limit-bt", type=float, default=5.0, help="Time limit for backtracking on small instances")
+    parser.add_argument("--threshold-n", type=int, default=15, help="Threshold N (default: 15)")
+    parser.add_argument("--meta-runs", type=int, default=1, help="Number of runs for metaheuristic algorithms (default: 10)")
+    parser.add_argument("--time-limit-bt", type=float, default=None, help="Optional time limit in seconds for backtracking (default: None / no limit)")
     parser.add_argument("--output-dir", default="experiments", help="Output directory for reports and data")
 
     args = parser.parse_args()
@@ -475,7 +542,7 @@ def main():
                     p = alt
             instance_files.append(str(p))
 
-    print("=== Starting CVRP Benchmark Pipeline (Threshold N=20) ===")
+    print(f"=== Starting CVRP Benchmark Pipeline (Threshold N={args.threshold_n}) ===")
     print(f"Total instances: {len(instance_files)}")
     print(f"Partition rule: N <= {args.threshold_n} -> Exact Only | N > {args.threshold_n} -> Metaheuristic Only")
     print(f"Metaheuristic runs: {args.meta_runs}\n")

@@ -1,4 +1,5 @@
 import math
+import re
 from dataclasses import dataclass, field
 from typing import List, Dict, Tuple, Union
 from pathlib import Path
@@ -9,6 +10,7 @@ class CVRPInstance:
     name: str = ""
     dimension: int = 0         # Tổng số nút (gồm kho và khách hàng)
     capacity: int = 0          # Sức chứa Q của mỗi xe
+    num_trucks: int = 0        # Số xe quy định (từ -kK nếu có)
     depot_id: int = 1          # ID kho hàng (mặc định là 1)
     coords: Dict[int, Tuple[float, float]] = field(default_factory=dict) # {node_id: (x, y)}
     demands: Dict[int, int] = field(default_factory=dict)                 # {node_id: demand}
@@ -19,6 +21,7 @@ class CVRPInstance:
             "name": self.name,
             "dimension": self.dimension,
             "capacity": self.capacity,
+            "num_trucks": self.num_trucks,
             "depot_id": self.depot_id,
             "coords": self.coords,
             "demands": self.demands,
@@ -75,6 +78,9 @@ class CVRPParser:
 
                 if key == "NAME":
                     instance.name = val
+                    m_k = re.search(r"-k(\d+)", val, re.IGNORECASE)
+                    if m_k:
+                        instance.num_trucks = int(m_k.group(1))
                 elif key == "DIMENSION":
                     instance.dimension = int(val)
                 elif key == "CAPACITY":
