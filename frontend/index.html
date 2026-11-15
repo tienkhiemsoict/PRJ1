@@ -1,0 +1,223 @@
+<!doctype html>
+<html lang="vi">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>CVRP Routing</title>
+
+    <link
+      rel="icon"
+      type="image/x-icon"
+      href="https://upload.wikimedia.org/wikipedia/vi/thumb/e/ef/Logo_%C4%90%E1%BA%A1i_h%E1%BB%8Dc_B%C3%A1ch_Khoa_H%C3%A0_N%E1%BB%99i.svg/1920px-Logo_%C4%90%E1%BA%A1i_h%E1%BB%8Dc_B%C3%A1ch_Khoa_H%C3%A0_N%E1%BB%99i.svg.png"
+    />
+
+    <link
+      rel="stylesheet"
+      href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css"
+    />
+
+    <link
+      href="https://fonts.googleapis.com/css2?family=Roboto:wght@400;500;700&display=swap"
+      rel="stylesheet"
+    />
+
+    <link rel="stylesheet" href="style.css" />
+  </head>
+  <body>
+    <div class="app-container">
+      <div id="sidebar">
+        <div class="profile-section">
+          <img
+            src="https://upload.wikimedia.org/wikipedia/vi/thumb/e/ef/Logo_%C4%90%E1%BA%A1i_h%E1%BB%8Dc_B%C3%A1ch_Khoa_H%C3%A0_N%E1%BB%99i.svg/1920px-Logo_%C4%90%E1%BA%A1i_h%E1%BB%8Dc_B%C3%A1ch_Khoa_H%C3%A0_N%E1%BB%99i.svg.png"
+            alt="HUST Logo"
+            class="profile-img"
+            style="width: 100px"
+          />
+        </div>
+
+        <div class="control-section">
+          <h3>Dữ liệu</h3>
+          <select id="instance-select" class="input-control" onchange="loadSelectedInstance(this.value)">
+            <option value="">Chọn testcase</option>
+          </select>
+          <input
+            type="file"
+            id="vrp-file-input"
+            accept=".vrp"
+            style="display: none"
+            onchange="handleFileUpload(this)"
+          />
+          <div class="btn-group">
+            <button
+              type="button"
+              onclick="triggerFileUpload()"
+              class="btn-sm btn-blue"
+            >
+              Tải file
+            </button>
+            <button
+              type="button"
+              onclick="generateRandomPoints()"
+              class="btn-sm btn-blue"
+            >
+              Ngẫu nhiên
+            </button>
+          </div>
+        </div>
+
+        <div class="control-section">
+          <h3>Thiết lập</h3>
+          <div class="btn-group">
+            <button
+              type="button"
+              onclick="setMode('depot')"
+              class="btn-sm btn-red"
+            >
+              Đặt kho
+            </button>
+            <button
+              type="button"
+              onclick="setMode('customer')"
+              class="btn-sm btn-red"
+            >
+              Đặt khách
+            </button>
+          </div>
+
+          <div class="form-grid">
+            <div class="form-item">
+              <label for="input-n">Số điểm N</label>
+              <input type="number" id="input-n" class="input-control" value="12" min="2" max="100" />
+            </div>
+            <div class="form-item">
+              <label for="input-demand">Nhu cầu</label>
+              <input type="number" id="input-demand" class="input-control" value="15" min="1" />
+            </div>
+            <div class="form-item">
+              <label for="input-k">Số xe K</label>
+              <input type="number" id="input-k" class="input-control" value="3" min="1" />
+            </div>
+            <div class="form-item">
+              <label for="input-cap">Tải trọng</label>
+              <input type="number" id="input-cap" class="input-control" value="60" min="1" />
+            </div>
+          </div>
+        </div>
+
+        <div class="control-section">
+          <h3>Thuật toán</h3>
+          <div id="threshold-info" class="sub-text">Chế độ: Chính xác (N &lt;= 15)</div>
+          <select id="algo-select" class="input-control">
+            <option value="auto">Tự động</option>
+            <option value="dynamic_programming">Dynamic Programming</option>
+            <option value="backtracking">Backtracking</option>
+          </select>
+
+          <button type="button" onclick="runRouting()" class="btn-lg btn-green">
+            Chạy thuật toán
+          </button>
+
+          <div class="btn-group" style="margin-top: 10px; margin-bottom: 0">
+            <button
+              type="button"
+              onclick="setDisplayMode('euclidean')"
+              class="btn-sm btn-blue"
+            >
+              Đường thẳng
+            </button>
+            <button
+              type="button"
+              onclick="setDisplayMode('osrm')"
+              class="btn-sm btn-blue"
+            >
+              Đường thực tế
+            </button>
+          </div>
+
+          <button type="button" onclick="resetMap()" class="btn-text">
+            Reset
+          </button>
+        </div>
+
+        <div class="control-section results-area">
+          <h3>Phân tích</h3>
+          <button
+            type="button"
+            id="compare-btn"
+            onclick="compareAlgos()"
+            class="btn-lg btn-blue"
+          >
+            So sánh hiệu năng
+          </button>
+          <button
+            type="button"
+            id="conv-btn"
+            onclick="openConvergenceModal()"
+            class="btn-lg btn-blue"
+          >
+            Đồ thị hội tụ
+          </button>
+
+          <div id="status" class="status-box" style="display: none"></div>
+
+          <table id="summary-table" class="result-table" style="display: none">
+            <thead>
+              <tr>
+                <th>Chỉ số</th>
+                <th>Giá trị</th>
+              </tr>
+            </thead>
+            <tbody id="summary-body"></tbody>
+          </table>
+
+          <div id="routes-box" class="routes-list" style="display: none"></div>
+        </div>
+      </div>
+
+      <div class="main-content">
+        <div id="map"></div>
+      </div>
+    </div>
+
+    <div id="compare-modal" class="modal" style="display: none">
+      <div class="modal-content">
+        <span class="close-btn" onclick="closeModal('compare-modal')">X</span>
+        <h3 class="modal-title">Kết quả phân tích thuật toán</h3>
+
+        <div class="chart-container">
+          <canvas id="algoChart"></canvas>
+        </div>
+
+        <div class="table-wrapper">
+          <table class="styled-table">
+            <thead>
+              <tr>
+                <th>Thuật toán</th>
+                <th>Quãng đường</th>
+                <th>Số xe</th>
+                <th>Lấp đầy</th>
+                <th>Thời gian</th>
+              </tr>
+            </thead>
+            <tbody id="comp-body"></tbody>
+          </table>
+        </div>
+      </div>
+    </div>
+
+    <div id="convergence-modal" class="modal" style="display: none">
+      <div class="modal-content">
+        <span class="close-btn" onclick="closeModal('convergence-modal')">X</span>
+        <h3 class="modal-title">Đồ thị hội tụ</h3>
+
+        <div class="chart-container">
+          <canvas id="convChart"></canvas>
+        </div>
+      </div>
+    </div>
+
+    <script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script>
+    <script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
+    <script src="app.js"></script>
+  </body>
+</html>
