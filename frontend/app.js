@@ -13,7 +13,9 @@ const CONFIG = {
             INSTANCES: '/api/instances',
             UPLOAD: '/api/upload',
             SOLVE: '/api/solve',
-            COMPARE: '/api/compare'
+            COMPARE: '/api/compare',
+            DB_VEHICLES: '/api/db/vehicles',
+            DB_EXPERIMENTS: '/api/db/experiments'
         }
     },
     ICONS: {
@@ -52,9 +54,25 @@ class AppState {
         this.compareChart = null;
         this.convChart = null;
         this.history = [];
+        this.activeWs = null;
+        this.runId = 0;
+    }
+
+    cancelActiveRun() {
+        this.runId += 1;
+        if (this.activeWs) {
+            try {
+                this.activeWs.close();
+            } catch (e) {
+                // ignore
+            }
+            this.activeWs = null;
+        }
+        return this.runId;
     }
 
     reset() {
+        this.cancelActiveRun();
         this.clearMarkers();
         this.clearRoutes();
         this.selectingMode = null;
@@ -390,12 +408,14 @@ async function calculateRoute() {
 
     const payload = buildSolvePayload();
     if (!validateMapConstraints(payload)) return;
+
+    const myRunId = appState.cancelActiveRun();
     const dim = appState.totalDimension();
     updateStatus('Đang chạy thuật toán', '#003a60');
 
     if (dim > CONFIG.THRESHOLD_N) {
-        const usedWs = await trySolveViaWebSocket(payload);
-        if (usedWs) return;
+        const usedWs = await trySolveViaWebSocket(payload, myRunId);
+        if (usedWs || myRunId !== appState.runId) return;
     }
 
     try {
@@ -404,49 +424,86 @@ async function calculateRoute() {
             headers: { 'Content-Type': 'application/json' },
             body: JSON.stringify(payload)
         });
+        if (myRunId !== appState.runId) return;
         const data = await res.json();
         if (!res.ok) {
             throw new Error(data.detail || 'Lỗi giải bài toán');
         }
         await handleSolveSuccess(data);
     } catch (err) {
-        updateStatus(`Lỗi: ${err.message}`, '#bc1e1e');
+        if (myRunId === appState.runId) {
+            updateStatus(`Lỗi: ${err.message}`, '#bc1e1e');
+        }
     }
 }
 
-function trySolveViaWebSocket(payload) {
+function drawRealtimePaths(paths) {
+    appState.clearRoutes();
+    (paths || []).forEach((coords, i) => {
+        if (!coords || coords.length < 2) return;
+        const line = L.polyline(coords, {
+            color: CONFIG.COLORS[i % CONFIG.COLORS.length],
+            weight: 3,
+            opacity: 0.75
+        }).addTo(appState.map);
+        appState.routeLines.push(line);
+    });
+}
+
+function trySolveViaWebSocket(payload, myRunId) {
     return new Promise(resolve => {
         let handled = false;
+        let lastStep = 0;
         try {
             const ws = new WebSocket(CONFIG.API.WS_URL);
+            appState.activeWs = ws;
             appState.history = [];
 
             ws.onopen = () => {
+                if (myRunId !== appState.runId) {
+                    ws.close();
+                    return;
+                }
                 ws.send(JSON.stringify(payload));
             };
 
             ws.onmessage = async (event) => {
+                if (myRunId !== appState.runId) return;
                 const msg = JSON.parse(event.data);
                 if (msg.type === 'progress') {
+                    if (msg.generation < lastStep) return;
+                    lastStep = msg.generation;
                     appState.history.push(msg.best_fitness);
-                    updateStatus(`Thế hệ ${msg.generation}: Chi phí ${msg.best_fitness}`, '#003a60');
+                    updateStatus(`Bước ${msg.generation}: Chi phí ${msg.best_fitness}`, '#003a60');
+                    if (msg.paths) {
+                        drawRealtimePaths(msg.paths);
+                    }
+                    if (appState.convChart) {
+                        appState.convChart.data.labels.push(msg.generation);
+                        appState.convChart.data.datasets[0].data.push(msg.best_fitness);
+                        appState.convChart.update('none');
+                    }
                 } else if (msg.type === 'complete') {
                     handled = true;
+                    if (appState.activeWs === ws) appState.activeWs = null;
                     await handleSolveSuccess(msg.result);
                     resolve(true);
                 } else if (msg.type === 'error') {
                     handled = true;
+                    if (appState.activeWs === ws) appState.activeWs = null;
                     updateStatus(`Lỗi: ${msg.detail}`, '#bc1e1e');
                     resolve(true);
                 }
             };
 
             ws.onerror = () => {
-                if (!handled) resolve(false);
+                if (appState.activeWs === ws) appState.activeWs = null;
+                if (!handled) resolve(myRunId !== appState.runId);
             };
 
             ws.onclose = () => {
-                if (!handled) resolve(false);
+                if (appState.activeWs === ws) appState.activeWs = null;
+                if (!handled) resolve(myRunId !== appState.runId);
             };
         } catch (e) {
             resolve(false);
@@ -613,6 +670,7 @@ function displayComparisonResults(data) {
         options: {
             responsive: true,
             maintainAspectRatio: false,
+            animation: false,
             scales: {
                 y: {
                     type: 'linear',
@@ -664,6 +722,7 @@ function openConvergenceModal() {
         options: {
             responsive: true,
             maintainAspectRatio: false,
+            animation: false,
             scales: {
                 x: { title: { display: true, text: 'Bước lặp / Thế hệ' } },
                 y: { title: { display: true, text: 'Quãng đường' } }
@@ -699,6 +758,77 @@ function closeModal(modalId) {
     document.getElementById(modalId || 'compare-modal').style.display = 'none';
 }
 
+async function loadVehiclesList() {
+    try {
+        const res = await fetch(`${CONFIG.API.BASE_URL}${CONFIG.API.ENDPOINTS.DB_VEHICLES}`);
+        if (!res.ok) return;
+        const data = await res.json();
+        const select = document.getElementById('vehicle-select');
+        if (!select) return;
+        (data.vehicles || []).forEach(v => {
+            const opt = document.createElement('option');
+            opt.value = JSON.stringify({ capacity: v.capacity, count: v.default_count });
+            opt.textContent = `${v.name} (Q=${v.capacity})`;
+            select.appendChild(opt);
+        });
+    } catch (err) {
+        console.log('Could not load vehicles list');
+    }
+}
+
+function applyVehiclePreset(val) {
+    if (!val) return;
+    try {
+        const preset = JSON.parse(val);
+        if (preset.capacity) document.getElementById('input-cap').value = preset.capacity;
+        if (preset.count) document.getElementById('input-k').value = preset.count;
+    } catch (e) {
+        // ignore invalid value
+    }
+}
+
+async function openHistoryModal() {
+    try {
+        const res = await fetch(`${CONFIG.API.BASE_URL}${CONFIG.API.ENDPOINTS.DB_EXPERIMENTS}?limit=50`);
+        if (!res.ok) throw new Error('Không tải được lịch sử');
+        const data = await res.json();
+        const rows = data.experiments || [];
+        const tbody = document.getElementById('history-body');
+        if (rows.length === 0) {
+            tbody.innerHTML = '<tr><td colspan="8">Chưa có dữ liệu lịch sử</td></tr>';
+        } else {
+            tbody.innerHTML = rows.map(item => `
+                <tr>
+                    <td>${item.created_at}</td>
+                    <td>${item.instance_name}</td>
+                    <td>${item.dimension}</td>
+                    <td>${item.algorithm}</td>
+                    <td>${item.total_distance}</td>
+                    <td>${item.num_vehicles}</td>
+                    <td>${item.fill_rate}%</td>
+                    <td>${item.execution_time} s</td>
+                </tr>
+            `).join('');
+        }
+        showModal('history-modal');
+    } catch (err) {
+        updateStatus(`Lỗi: ${err.message}`, '#bc1e1e');
+    }
+}
+
+async function clearExperimentHistory() {
+    try {
+        const res = await fetch(`${CONFIG.API.BASE_URL}${CONFIG.API.ENDPOINTS.DB_EXPERIMENTS}`, {
+            method: 'DELETE'
+        });
+        if (!res.ok) throw new Error('Không xóa được lịch sử');
+        document.getElementById('history-body').innerHTML = '<tr><td colspan="8">Chưa có dữ liệu lịch sử</td></tr>';
+        updateStatus('Đã xóa lịch sử', '#11990f');
+    } catch (err) {
+        updateStatus(`Lỗi: ${err.message}`, '#bc1e1e');
+    }
+}
+
 function setupEventListeners() {
     appState.map.on('click', handleMapClick);
     document.getElementById('input-n').addEventListener('change', (e) => {
@@ -706,7 +836,7 @@ function setupEventListeners() {
     });
 
     window.onclick = (event) => {
-        ['compare-modal', 'convergence-modal'].forEach(id => {
+        ['compare-modal', 'convergence-modal', 'history-modal'].forEach(id => {
             const modal = document.getElementById(id);
             if (event.target === modal) {
                 closeModal(id);
@@ -719,6 +849,7 @@ function init() {
     initializeMap();
     setupEventListeners();
     loadInstancesList();
+    loadVehiclesList();
     syncThresholdUI(12);
 }
 
@@ -739,3 +870,6 @@ window.handleFileUpload = handleFileUpload;
 window.generateRandomPoints = generateRandomPoints;
 window.setDisplayMode = setDisplayMode;
 window.openConvergenceModal = openConvergenceModal;
+window.applyVehiclePreset = applyVehiclePreset;
+window.openHistoryModal = openHistoryModal;
+window.clearExperimentHistory = clearExperimentHistory;

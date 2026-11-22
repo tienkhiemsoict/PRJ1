@@ -1,7 +1,7 @@
 import math
 import random
 import time
-from typing import List, Dict, Any, Optional
+from typing import List, Dict, Any, Optional, Callable
 try:
     from src.cvrp_parser import CVRPParser, CVRPInstance
 except ImportError:
@@ -15,7 +15,8 @@ def solve_cvrp(
     cooling_rate: float = 0.995,
     iters_per_temp: int = 350,
     seed: Optional[int] = None,
-    return_history: bool = False
+    return_history: bool = False,
+    progress_callback: Optional[Callable[[int, float, Optional[List[List[int]]]], None]] = None
 ) -> Dict[str, Any]:
     if seed is not None:
         random.seed(seed)
@@ -121,7 +122,11 @@ def solve_cvrp(
     history = [best_cost]
 
     t = t_init
+    step = 0
+    last_emit_time = 0.0
+    last_emitted_cost = float("inf")
     while t > t_min and n > 1:
+        step += 1
         for _ in range(iters_per_temp):
             new_tour = curr_tour[:]
             move_type = random.randint(1, 3)
@@ -149,6 +154,17 @@ def solve_cvrp(
         t *= cooling_rate
         if return_history:
             history.append(best_cost)
+
+        if progress_callback is not None:
+            now = time.time()
+            if step == 1 or (now - last_emit_time) >= 0.18 or t <= t_min:
+                last_emit_time = now
+                emit_dist = sum(_calc_route_dist(r) for r in best_routes)
+                if best_cost < last_emitted_cost:
+                    last_emitted_cost = best_cost
+                    progress_callback(step, emit_dist, best_routes)
+                else:
+                    progress_callback(step, emit_dist, None)
 
     elapsed_time = round(time.time() - start_time, 4)
     final_distance = sum(_calc_route_dist(r) for r in best_routes)

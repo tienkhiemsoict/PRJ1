@@ -84,6 +84,10 @@
             </button>
           </div>
 
+          <select id="vehicle-select" class="input-control" onchange="applyVehiclePreset(this.value)">
+            <option value="">Chọn loại xe</option>
+          </select>
+
           <div class="form-grid">
             <div class="form-item">
               <label for="input-n">Số điểm N</label>
@@ -157,6 +161,14 @@
           >
             Đồ thị hội tụ
           </button>
+          <button
+            type="button"
+            id="history-btn"
+            onclick="openHistoryModal()"
+            class="btn-lg btn-blue"
+          >
+            Lịch sử chạy
+          </button>
 
           <div id="status" class="status-box" style="display: none"></div>
 
@@ -216,8 +228,37 @@
       </div>
     </div>
 
+    <div id="history-modal" class="modal" style="display: none">
+      <div class="modal-content" style="max-width: 780px">
+        <span class="close-btn" onclick="closeModal('history-modal')">X</span>
+        <h3 class="modal-title">Lịch sử thực nghiệm</h3>
+
+        <div class="table-wrapper" style="max-height: 360px; overflow-y: auto">
+          <table class="styled-table">
+            <thead>
+              <tr>
+                <th>Thời điểm</th>
+                <th>Bài toán</th>
+                <th>N</th>
+                <th>Thuật toán</th>
+                <th>Quãng đường</th>
+                <th>Số xe</th>
+                <th>Lấp đầy</th>
+                <th>Thời gian</th>
+              </tr>
+            </thead>
+            <tbody id="history-body"></tbody>
+          </table>
+        </div>
+
+        <button type="button" onclick="clearExperimentHistory()" class="btn-text">
+          Xóa lịch sử
+        </button>
+      </div>
+    </div>
+
     <script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script>
     <script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
-    <script src="app.js"></script>
+    <script src="app.js?v=3"></script>
   </body>
 </html>

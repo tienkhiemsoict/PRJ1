@@ -128,10 +128,10 @@ def run_experiment(
             for r in range(meta_runs):
                 res_sa = solve_sa(
                     instance,
-                    t_init=sa_params.get("t_init", 1000.0),
+                    t_init=sa_params.get("t_init", 200.0),
                     t_min=sa_params.get("t_min", 0.05),
-                    cooling_rate=sa_params.get("cooling_rate", 0.985),
-                    iters_per_temp=sa_params.get("iters_per_temp", 40),
+                    cooling_rate=sa_params.get("cooling_rate", 0.995),
+                    iters_per_temp=sa_params.get("iters_per_temp", 350),
                     seed=42 + r
                 )
                 sa_times.append(res_sa["execution_time"])
@@ -164,12 +164,12 @@ def run_experiment(
             for r in range(meta_runs):
                 res_ga = solve_ga(
                     instance,
-                    pop_size=ga_params.get("pop_size", 50),
-                    generations=ga_params.get("generations", 100),
-                    crossover_rate=ga_params.get("crossover_rate", 0.8),
-                    mutation_rate=ga_params.get("mutation_rate", 0.2),
-                    tournament_size=ga_params.get("tournament_size", 3),
-                    elite_size=ga_params.get("elite_size", 2),
+                    pop_size=ga_params.get("pop_size", 80),
+                    generations=ga_params.get("generations", 3500),
+                    crossover_rate=ga_params.get("crossover_rate", 0.75),
+                    mutation_rate=ga_params.get("mutation_rate", 0.5),
+                    tournament_size=ga_params.get("tournament_size", 5),
+                    elite_size=ga_params.get("elite_size", 3),
                     seed=42 + r
                 )
                 ga_times.append(res_ga["execution_time"])

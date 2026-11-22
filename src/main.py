@@ -1,6 +1,7 @@
 import asyncio
 import json
 import math
+import time
 from pathlib import Path
 from typing import Optional, Dict, Any, List, Tuple
 import uvicorn
@@ -16,6 +17,17 @@ try:
     from src.simulated_annealing import solve_cvrp as solve_sa
     from src.genetic_algorithm import solve_cvrp as solve_ga
     from src.experiment_pipeline import run_experiment, get_optimal_value
+    from src.database import (
+        init_db,
+        list_vehicles,
+        upsert_vehicle,
+        save_customer_dataset,
+        list_customer_datasets,
+        get_customer_dataset,
+        log_experiment,
+        list_experiments,
+        clear_experiments,
+    )
 except ImportError:
     from cvrp_parser import CVRPParser, CVRPInstance
     from backtracking import solve_cvrp as solve_bt
@@ -23,11 +35,23 @@ except ImportError:
     from simulated_annealing import solve_cvrp as solve_sa
     from genetic_algorithm import solve_cvrp as solve_ga
     from experiment_pipeline import run_experiment, get_optimal_value
+    from database import (
+        init_db,
+        list_vehicles,
+        upsert_vehicle,
+        save_customer_dataset,
+        list_customer_datasets,
+        get_customer_dataset,
+        log_experiment,
+        list_experiments,
+        clear_experiments,
+    )
 
 
 THRESHOLD_N = 15
 DATA_DIR = Path("CVRPLIB")
 DEFAULT_CENTER = (21.0045, 105.8431)  # Khu vực Bách Khoa Hà Nội
+init_db()
 
 app = FastAPI(
     title="CVRP Optimization Backend",
@@ -75,21 +99,21 @@ class DPRequest(BaseCVRPRequest):
 
 
 class SARequest(BaseCVRPRequest):
-    t_init: float = 1000.0
+    t_init: float = 200.0
     t_min: float = 0.05
-    cooling_rate: float = 0.985
-    iters_per_temp: int = 40
+    cooling_rate: float = 0.995
+    iters_per_temp: int = 350
     seed: Optional[int] = None
     return_history: bool = False
 
 
 class GARequest(BaseCVRPRequest):
-    pop_size: int = 50
-    generations: int = 100
-    crossover_rate: float = 0.8
-    mutation_rate: float = 0.2
-    tournament_size: int = 3
-    elite_size: int = 2
+    pop_size: int = 80
+    generations: int = 3500
+    crossover_rate: float = 0.75
+    mutation_rate: float = 0.5
+    tournament_size: int = 5
+    elite_size: int = 3
     seed: Optional[int] = None
     return_history: bool = False
 
@@ -102,9 +126,23 @@ class UnifiedSolveRequest(BaseCVRPRequest):
 class ExperimentRequest(BaseModel):
     instances: Optional[List[str]] = None
     threshold_n: int = THRESHOLD_N
-    meta_runs: int = 10
+    meta_runs: int = 1
     time_limit_bt: Optional[float] = None
     output_dir: str = "experiments"
+
+
+class VehicleCreateRequest(BaseModel):
+    name: str
+    capacity: int
+    default_count: int = 3
+
+
+class CustomerDatasetRequest(BaseModel):
+    dataset_name: str
+    depot: DepotPoint
+    customers: List[CustomerPoint]
+    capacity: int = 100
+    num_trucks: int = 0
 
 
 ALGO_REGISTRY = {
@@ -113,10 +151,10 @@ ALGO_REGISTRY = {
     "branch_and_bound": (solve_bt, True, ("time_limit", "max_customers")),
     "dp": (solve_dp, True, ("max_customers",)),
     "dynamic_programming": (solve_dp, True, ("max_customers",)),
-    "sa": (solve_sa, False, ("t_init", "t_min", "cooling_rate", "iters_per_temp", "seed", "return_history")),
-    "simulated_annealing": (solve_sa, False, ("t_init", "t_min", "cooling_rate", "iters_per_temp", "seed", "return_history")),
-    "ga": (solve_ga, False, ("pop_size", "generations", "crossover_rate", "mutation_rate", "tournament_size", "elite_size", "seed", "return_history")),
-    "genetic_algorithm": (solve_ga, False, ("pop_size", "generations", "crossover_rate", "mutation_rate", "tournament_size", "elite_size", "seed", "return_history")),
+    "sa": (solve_sa, False, ("t_init", "t_min", "cooling_rate", "iters_per_temp", "seed", "return_history", "progress_callback")),
+    "simulated_annealing": (solve_sa, False, ("t_init", "t_min", "cooling_rate", "iters_per_temp", "seed", "return_history", "progress_callback")),
+    "ga": (solve_ga, False, ("pop_size", "generations", "crossover_rate", "mutation_rate", "tournament_size", "elite_size", "seed", "return_history", "progress_callback")),
+    "genetic_algorithm": (solve_ga, False, ("pop_size", "generations", "crossover_rate", "mutation_rate", "tournament_size", "elite_size", "seed", "return_history", "progress_callback")),
 }
 
 BASE_FIELDS = {"file_path", "file_content", "depot", "customers", "capacity", "num_trucks"}
@@ -199,12 +237,31 @@ def _resolve_vrp_path(file_path: str) -> Path:
     raise HTTPException(status_code=404, detail=f"File not found: {file_path}")
 
 
+def _build_instance_from_db_dataset(ds: Dict[str, Any], req_capacity: int, req_num_trucks: int) -> CVRPInstance:
+    nodes = ds["map_nodes"]
+    depot_node = next((n for n in nodes if n["is_depot"]), nodes[0])
+    cust_nodes = [n for n in nodes if not n["is_depot"]]
+    cap = req_capacity if req_capacity > 0 else ds["capacity"]
+    trucks = req_num_trucks if req_num_trucks > 0 else ds["num_trucks"]
+    inst = _build_instance_from_points(
+        DepotPoint(lat=depot_node["lat"], lng=depot_node["lng"]),
+        [CustomerPoint(id=c["id"], lat=c["lat"], lng=c["lng"], demand=c["demand"]) for c in cust_nodes],
+        cap,
+        trucks,
+    )
+    inst.name = ds["name"]
+    return inst
+
+
 def resolve_instance(req: BaseCVRPRequest) -> CVRPInstance:
     if req.depot is not None and req.customers is not None:
         return _build_instance_from_points(req.depot, req.customers, req.capacity, req.num_trucks)
     if req.file_content and req.file_content.strip():
         return CVRPParser.parse_string(req.file_content)
     if req.file_path:
+        db_ds = get_customer_dataset(req.file_path)
+        if db_ds is not None:
+            return _build_instance_from_db_dataset(db_ds, req.capacity, req.num_trucks)
         return CVRPParser.parse_file(str(_resolve_vrp_path(req.file_path)))
     raise HTTPException(status_code=400, detail="Must provide file_path, file_content, or depot and customers.")
 
@@ -302,7 +359,22 @@ def _dispatch_solve(algorithm: str, inst: CVRPInstance, params: Dict[str, Any]) 
             status_code=400,
             detail=f"Không thể xếp hợp lệ vào giới hạn {inst.num_trucks} xe (phương án cần {res['num_vehicles']} xe). Hãy tăng số xe hoặc tải trọng."
         )
-    return _enrich_result(inst, res)
+    enriched = _enrich_result(inst, res)
+    try:
+        log_experiment(
+            instance_name=inst.name or "Custom-Map",
+            dimension=inst.dimension,
+            capacity=inst.capacity,
+            algorithm=enriched["algorithm"],
+            total_distance=enriched["total_distance"],
+            num_vehicles=enriched["num_vehicles"],
+            fill_rate=enriched["fill_rate"],
+            execution_time=enriched["execution_time"],
+            routes=enriched["routes"],
+        )
+    except Exception:
+        pass
+    return enriched
 
 
 @app.get("/")
@@ -323,37 +395,60 @@ def root():
 
 @app.get("/api/instances")
 def list_instances():
-    if not DATA_DIR.exists():
-        return {"instances": []}
-
     results = []
-    for f in sorted(DATA_DIR.glob("*.vrp")):
-        try:
-            inst = CVRPParser.parse_file(str(f))
-            opt = get_optimal_value(f)
-            is_exact = inst.dimension <= THRESHOLD_N
-            results.append({
-                "name": inst.name or f.stem,
-                "file": f.name,
-                "path": str(f).replace("\\", "/"),
-                "dimension": inst.dimension,
-                "capacity": inst.capacity,
-                "optimal_value": opt,
-                "category": "exact" if is_exact else "metaheuristic",
-                "recommended_algorithm": "exact (backtracking/dp)" if is_exact else "metaheuristic (sa/ga)"
-            })
-        except Exception:
-            results.append({
-                "name": f.stem,
-                "file": f.name,
-                "path": str(f).replace("\\", "/"),
-                "error": "Failed to parse"
-            })
+
+    # 1. Các bộ dữ liệu mẫu / đã lưu từ SQLite (ưu tiên hiển thị đầu danh sách để demo nhanh)
+    for ds in list_customer_datasets():
+        is_exact = ds["dimension"] <= THRESHOLD_N
+        results.append({
+            "name": ds["name"],
+            "file": ds["name"],
+            "path": ds["name"],
+            "dimension": ds["dimension"],
+            "capacity": ds["capacity"],
+            "num_trucks": ds["num_trucks"],
+            "optimal_value": None,
+            "source": "sqlite",
+            "category": "exact" if is_exact else "metaheuristic",
+            "recommended_algorithm": "exact (backtracking/dp)" if is_exact else "metaheuristic (sa/ga)"
+        })
+
+    # 2. Các bộ dữ liệu chuẩn CVRPLIB
+    if DATA_DIR.exists():
+        for f in sorted(DATA_DIR.glob("*.vrp")):
+            try:
+                inst = CVRPParser.parse_file(str(f))
+                opt = get_optimal_value(f)
+                is_exact = inst.dimension <= THRESHOLD_N
+                results.append({
+                    "name": inst.name or f.stem,
+                    "file": f.name,
+                    "path": str(f).replace("\\", "/"),
+                    "dimension": inst.dimension,
+                    "capacity": inst.capacity,
+                    "optimal_value": opt,
+                    "source": "cvrplib",
+                    "category": "exact" if is_exact else "metaheuristic",
+                    "recommended_algorithm": "exact (backtracking/dp)" if is_exact else "metaheuristic (sa/ga)"
+                })
+            except Exception:
+                results.append({
+                    "name": f.stem,
+                    "file": f.name,
+                    "path": str(f).replace("\\", "/"),
+                    "error": "Failed to parse"
+                })
     return {"count": len(results), "instances": results}
 
 
 @app.get("/api/instances/{name}")
 def get_instance_details(name: str):
+    db_ds = get_customer_dataset(name)
+    if db_ds is not None:
+        db_ds["optimal_value"] = None
+        db_ds["category"] = "exact" if db_ds["dimension"] <= THRESHOLD_N else "metaheuristic"
+        return db_ds
+
     cand = _resolve_vrp_path(name)
     inst = CVRPParser.parse_file(str(cand))
     data = inst.to_dict()
@@ -465,20 +560,41 @@ async def websocket_solve(websocket: WebSocket):
         req = UnifiedSolveRequest(**payload)
         inst = resolve_instance(req)
         params = dict(req.params)
+        map_coords = _instance_to_map_coords(inst)
+        loop = asyncio.get_running_loop()
+        queue: asyncio.Queue = asyncio.Queue()
+
+        def on_progress(step: int, best_dist: float, routes: Optional[List[List[int]]]):
+            msg: Dict[str, Any] = {
+                "type": "progress",
+                "generation": step,
+                "best_fitness": best_dist,
+            }
+            if routes is not None:
+                msg["paths"] = [
+                    [[map_coords[nid][0], map_coords[nid][1]] for nid in r if nid in map_coords]
+                    for r in routes
+                ]
+            loop.call_soon_threadsafe(queue.put_nowait, msg)
+            time.sleep(0.002)  # Nhả GIL để event loop gửi gói WebSocket ngay lập tức
+
         if inst.dimension > THRESHOLD_N:
             params["return_history"] = True
+            params["progress_callback"] = on_progress
 
-        res = _dispatch_solve(req.algorithm, inst, params)
-        history = res.get("history", [])
-        if history:
-            step_stride = max(1, len(history) // 25)
-            for idx in range(0, len(history), step_stride):
-                await websocket.send_json({
-                    "type": "progress",
-                    "generation": idx + 1,
-                    "best_fitness": history[idx]
-                })
-                await asyncio.sleep(0.02)
+        async def sender():
+            while True:
+                item = await queue.get()
+                if item is None:
+                    break
+                await websocket.send_json(item)
+
+        sender_task = asyncio.create_task(sender())
+        try:
+            res = await asyncio.to_thread(_dispatch_solve, req.algorithm, inst, params)
+        finally:
+            await queue.put(None)
+            await sender_task
 
         await websocket.send_json({
             "type": "complete",
@@ -487,7 +603,8 @@ async def websocket_solve(websocket: WebSocket):
     except WebSocketDisconnect:
         pass
     except Exception as exc:
-        await websocket.send_json({"type": "error", "detail": str(exc)})
+        detail = getattr(exc, "detail", str(exc))
+        await websocket.send_json({"type": "error", "detail": detail})
     finally:
         try:
             await websocket.close()
@@ -518,6 +635,55 @@ def get_experiment_results(output_dir: str = "experiments"):
         raise HTTPException(status_code=404, detail="Chưa có kết quả thực nghiệm. Hãy chạy thực nghiệm trước.")
     with open(p, "r", encoding="utf-8") as f:
         return json.load(f)
+
+
+@app.get("/api/db/vehicles")
+def api_list_vehicles():
+    return {"vehicles": list_vehicles()}
+
+
+@app.post("/api/db/vehicles")
+def api_upsert_vehicle(req: VehicleCreateRequest):
+    if not req.name.strip():
+        raise HTTPException(status_code=400, detail="Tên loại xe không được để trống.")
+    return upsert_vehicle(req.name, req.capacity, req.default_count)
+
+
+@app.get("/api/db/customers")
+def api_list_customer_datasets():
+    return {"datasets": list_customer_datasets()}
+
+
+@app.get("/api/db/customers/{dataset_name}")
+def api_get_customer_dataset(dataset_name: str):
+    data = get_customer_dataset(dataset_name)
+    if data is None:
+        raise HTTPException(status_code=404, detail=f"Không tìm thấy bộ dữ liệu '{dataset_name}'.")
+    return data
+
+
+@app.post("/api/db/customers")
+def api_save_customer_dataset(req: CustomerDatasetRequest):
+    if not req.customers:
+        raise HTTPException(status_code=400, detail="Danh sách khách hàng không được rỗng.")
+    return save_customer_dataset(
+        req.dataset_name,
+        req.depot.model_dump(),
+        [c.model_dump() for c in req.customers],
+        capacity=req.capacity,
+        num_trucks=req.num_trucks,
+    )
+
+
+@app.get("/api/db/experiments")
+def api_list_experiments(limit: int = 50):
+    return {"experiments": list_experiments(limit=limit)}
+
+
+@app.delete("/api/db/experiments")
+def api_clear_experiments():
+    deleted = clear_experiments()
+    return {"deleted": deleted}
 
 
 frontend_dir = Path(__file__).resolve().parent.parent / "frontend"

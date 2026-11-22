@@ -1,6 +1,6 @@
 import random
 import time
-from typing import List, Dict, Any, Optional
+from typing import List, Dict, Any, Optional, Callable
 try:
     from src.cvrp_parser import CVRPParser, CVRPInstance
 except ImportError:
@@ -16,7 +16,8 @@ def solve_cvrp(
     tournament_size: int = 5,
     elite_size: int = 3,
     seed: Optional[int] = None,
-    return_history: bool = False
+    return_history: bool = False,
+    progress_callback: Optional[Callable[[int, float, Optional[List[List[int]]]], None]] = None
 ) -> Dict[str, Any]:
     if seed is not None:
         random.seed(seed)
@@ -136,8 +137,10 @@ def solve_cvrp(
     best_ind = pop[0][:]
     best_cost = float("inf")
     history: List[float] = []
+    last_emit_time = 0.0
+    last_emitted_cost = float("inf")
 
-    for _ in range(generations):
+    for gen in range(generations):
         costs = [split_routes(ind)[1] for ind in pop]
         for ind, c in zip(pop, costs):
             if c < best_cost:
@@ -146,6 +149,20 @@ def solve_cvrp(
 
         if return_history:
             history.append(best_cost)
+
+        if progress_callback is not None:
+            now = time.time()
+            if gen == 0 or (now - last_emit_time) >= 0.18 or gen == generations - 1:
+                last_emit_time = now
+                if best_cost < last_emitted_cost:
+                    last_emitted_cost = best_cost
+                    emit_routes, _ = split_routes(best_ind)
+                    emit_dist = sum(_calc_route_dist(r) for r in emit_routes)
+                    progress_callback(gen + 1, emit_dist, emit_routes)
+                else:
+                    emit_routes, _ = split_routes(best_ind)
+                    emit_dist = sum(_calc_route_dist(r) for r in emit_routes)
+                    progress_callback(gen + 1, emit_dist, None)
 
         ranked = sorted(zip(pop, costs), key=lambda x: x[1])
         new_pop = [ranked[k][0][:] for k in range(min(elite_size, pop_size))]
