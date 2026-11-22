@@ -1,12 +1,14 @@
 import asyncio
 import json
 import math
+import os
 import time
 from pathlib import Path
 from typing import Optional, Dict, Any, List, Tuple
 import uvicorn
 from fastapi import FastAPI, HTTPException, Request, WebSocket, WebSocketDisconnect
 from fastapi.middleware.cors import CORSMiddleware
+from fastapi.responses import RedirectResponse
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel
 
@@ -379,6 +381,11 @@ def _dispatch_solve(algorithm: str, inst: CVRPInstance, params: Dict[str, Any]) 
 
 @app.get("/")
 def root():
+    return RedirectResponse(url="/frontend/index.html")
+
+
+@app.get("/api/health")
+def health_check():
     return {
         "status": "online",
         "service": "CVRP Optimization Backend",
@@ -692,4 +699,5 @@ if frontend_dir.exists():
 
 
 if __name__ == "__main__":
-    uvicorn.run(app, host="127.0.0.1", port=8000)
+    port = int(os.environ.get("PORT", 8000))
+    uvicorn.run(app, host="0.0.0.0", port=port)

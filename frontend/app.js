@@ -1,3 +1,9 @@
+const IS_EXTERNAL_PREVIEW = window.location.protocol === 'file:' || window.location.port === '5500';
+const API_ORIGIN = IS_EXTERNAL_PREVIEW ? 'http://127.0.0.1:8000' : window.location.origin;
+const WS_ORIGIN = IS_EXTERNAL_PREVIEW
+    ? 'ws://127.0.0.1:8000'
+    : `${window.location.protocol === 'https:' ? 'wss:' : 'ws:'}//${window.location.host}`;
+
 const CONFIG = {
     MAP: {
         CENTER: [21.0045, 105.8431],
@@ -6,8 +12,8 @@ const CONFIG = {
         MAX_ZOOM: 19
     },
     API: {
-        BASE_URL: 'http://127.0.0.1:8000',
-        WS_URL: 'ws://127.0.0.1:8000/ws/solve',
+        BASE_URL: API_ORIGIN,
+        WS_URL: `${WS_ORIGIN}/ws/solve`,
         OSRM_URL: 'https://router.project-osrm.org/route/v1/driving',
         ENDPOINTS: {
             INSTANCES: '/api/instances',
