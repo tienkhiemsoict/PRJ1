@@ -1,11 +1,21 @@
 import math
 import random
+import sys
 import time
+from pathlib import Path
 from typing import List, Dict, Any, Optional, Callable
+
+_ROOT_DIR = str(Path(__file__).resolve().parent.parent.parent)
+if _ROOT_DIR not in sys.path:
+    sys.path.insert(0, _ROOT_DIR)
+
 try:
-    from src.cvrp_parser import CVRPParser, CVRPInstance
+    from src.algorithms.cvrp_parser import CVRPParser, CVRPInstance
 except ImportError:
-    from cvrp_parser import CVRPParser, CVRPInstance
+    try:
+        from .cvrp_parser import CVRPParser, CVRPInstance
+    except ImportError:
+        from cvrp_parser import CVRPParser, CVRPInstance
 
 
 def solve_cvrp(
@@ -195,5 +205,5 @@ def solve_from_file(
 
 
 if __name__ == "__main__":
-    result = solve_from_file("CVRPLIB/A-n32-k5.vrp", seed=42)
+    result = solve_from_file("data/CVRPLIB/A-n32-k5.vrp", seed=42)
     print("Cost:", result["total_distance"], "Time:", result["execution_time"], "Vehicles:", result["num_vehicles"])

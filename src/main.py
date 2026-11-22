@@ -2,9 +2,14 @@ import asyncio
 import json
 import math
 import os
+import sys
 import time
 from pathlib import Path
 from typing import Optional, Dict, Any, List, Tuple
+
+_ROOT_DIR = str(Path(__file__).resolve().parent.parent)
+if _ROOT_DIR not in sys.path:
+    sys.path.insert(0, _ROOT_DIR)
 import uvicorn
 from fastapi import FastAPI, HTTPException, Request, WebSocket, WebSocketDisconnect
 from fastapi.middleware.cors import CORSMiddleware
@@ -13,11 +18,11 @@ from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel
 
 try:
-    from src.cvrp_parser import CVRPParser, CVRPInstance
-    from src.backtracking import solve_cvrp as solve_bt
-    from src.dynamic_programming import solve_cvrp as solve_dp
-    from src.simulated_annealing import solve_cvrp as solve_sa
-    from src.genetic_algorithm import solve_cvrp as solve_ga
+    from src.algorithms.cvrp_parser import CVRPParser, CVRPInstance
+    from src.algorithms.backtracking import solve_cvrp as solve_bt
+    from src.algorithms.dynamic_programming import solve_cvrp as solve_dp
+    from src.algorithms.simulated_annealing import solve_cvrp as solve_sa
+    from src.algorithms.genetic_algorithm import solve_cvrp as solve_ga
     from src.experiment_pipeline import run_experiment, get_optimal_value
     from src.database import (
         init_db,
@@ -31,11 +36,11 @@ try:
         clear_experiments,
     )
 except ImportError:
-    from cvrp_parser import CVRPParser, CVRPInstance
-    from backtracking import solve_cvrp as solve_bt
-    from dynamic_programming import solve_cvrp as solve_dp
-    from simulated_annealing import solve_cvrp as solve_sa
-    from genetic_algorithm import solve_cvrp as solve_ga
+    from algorithms.cvrp_parser import CVRPParser, CVRPInstance
+    from algorithms.backtracking import solve_cvrp as solve_bt
+    from algorithms.dynamic_programming import solve_cvrp as solve_dp
+    from algorithms.simulated_annealing import solve_cvrp as solve_sa
+    from algorithms.genetic_algorithm import solve_cvrp as solve_ga
     from experiment_pipeline import run_experiment, get_optimal_value
     from database import (
         init_db,
@@ -51,7 +56,8 @@ except ImportError:
 
 
 THRESHOLD_N = 15
-DATA_DIR = Path("CVRPLIB")
+BASE_DIR = Path(__file__).resolve().parent.parent
+DATA_DIR = BASE_DIR / "data" / "CVRPLIB"
 DEFAULT_CENTER = (21.0045, 105.8431)  # Khu vực Bách Khoa Hà Nội
 init_db()
 
@@ -700,4 +706,5 @@ if frontend_dir.exists():
 
 if __name__ == "__main__":
     port = int(os.environ.get("PORT", 8000))
-    uvicorn.run(app, host="0.0.0.0", port=port)
+    host = "0.0.0.0" if "PORT" in os.environ else "127.0.0.1"
+    uvicorn.run(app, host=host, port=port)

@@ -145,6 +145,14 @@ class CVRPParser:
     @classmethod
     def parse_file(cls, filepath: Union[str, Path]) -> CVRPInstance:
         """Parse dữ liệu trực tiếp từ đường dẫn file trên máy"""
-        with open(filepath, "r", encoding="utf-8") as f:
+        p = Path(filepath)
+        if not p.is_file():
+            base_data = Path(__file__).resolve().parent.parent.parent / "data" / "CVRPLIB"
+            cand = base_data / p.name
+            if cand.is_file():
+                p = cand
+            elif (base_data / f"{p.name}.vrp").is_file():
+                p = base_data / f"{p.name}.vrp"
+        with open(p, "r", encoding="utf-8") as f:
             content = f.read()
         return cls.parse_string(content)

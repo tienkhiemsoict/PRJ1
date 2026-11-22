@@ -8,6 +8,10 @@ import argparse
 from pathlib import Path
 from typing import List, Dict, Any, Optional
 
+_ROOT_DIR = str(Path(__file__).resolve().parent.parent)
+if _ROOT_DIR not in sys.path:
+    sys.path.insert(0, _ROOT_DIR)
+
 if hasattr(sys.stdout, "reconfigure"):
     try:
         sys.stdout.reconfigure(encoding="utf-8")
@@ -15,17 +19,19 @@ if hasattr(sys.stdout, "reconfigure"):
         pass
 
 try:
-    from src.cvrp_parser import CVRPParser, CVRPInstance
-    from src.backtracking import solve_cvrp as solve_bt
-    from src.dynamic_programming import solve_cvrp as solve_dp
-    from src.simulated_annealing import solve_cvrp as solve_sa
-    from src.genetic_algorithm import solve_cvrp as solve_ga
+    from src.algorithms.cvrp_parser import CVRPParser, CVRPInstance
+    from src.algorithms.backtracking import solve_cvrp as solve_bt
+    from src.algorithms.dynamic_programming import solve_cvrp as solve_dp
+    from src.algorithms.simulated_annealing import solve_cvrp as solve_sa
+    from src.algorithms.genetic_algorithm import solve_cvrp as solve_ga
 except ImportError:
-    from cvrp_parser import CVRPParser, CVRPInstance
-    from backtracking import solve_cvrp as solve_bt
-    from dynamic_programming import solve_cvrp as solve_dp
-    from simulated_annealing import solve_cvrp as solve_sa
-    from genetic_algorithm import solve_cvrp as solve_ga
+    from algorithms.cvrp_parser import CVRPParser, CVRPInstance
+    from algorithms.backtracking import solve_cvrp as solve_bt
+    from algorithms.dynamic_programming import solve_cvrp as solve_dp
+    from algorithms.simulated_annealing import solve_cvrp as solve_sa
+    from algorithms.genetic_algorithm import solve_cvrp as solve_ga
+
+DEFAULT_DATA_DIR = Path(__file__).resolve().parent.parent / "data" / "CVRPLIB"
 
 
 def get_optimal_value(filepath: Path) -> Optional[int]:
@@ -442,7 +448,7 @@ def generate_all_charts(
         fig, axes = plt.subplots(1, 3, figsize=(15, 4.5))
         for idx, (c_name, title) in enumerate(cases):
             ax = axes[idx]
-            vrp_path = Path("CVRPLIB") / f"{c_name}.vrp"
+            vrp_path = DEFAULT_DATA_DIR / f"{c_name}.vrp"
             if vrp_path.exists():
                 inst = CVRPParser.parse_file(str(vrp_path))
                 opt = get_optimal_value(vrp_path)
@@ -529,7 +535,7 @@ def main():
 
     args = parser.parse_args()
 
-    data_dir = Path("CVRPLIB")
+    data_dir = DEFAULT_DATA_DIR
     if args.all or args.instances is None:
         instance_files = [str(f) for f in sorted(data_dir.glob("*.vrp"))]
     else:

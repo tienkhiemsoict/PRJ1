@@ -5,7 +5,8 @@ from pathlib import Path
 from typing import Any, Dict, List, Optional
 
 
-DB_PATH = Path(__file__).resolve().parent.parent / "cvrp.db"
+DB_PATH = Path(__file__).resolve().parent.parent / "data" / "cvrp.db"
+DB_PATH.parent.mkdir(parents=True, exist_ok=True)
 
 DEFAULT_VEHICLES = [
     ("Xe máy", 30, 4),
